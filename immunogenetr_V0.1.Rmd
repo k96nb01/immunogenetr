@@ -18,6 +18,29 @@ library(rlang)
 ```
 
 ```{r}
+# HLA_column_repair function. This function will change column names that have the official HLA nomenclature (e.g. "HLA-A*" or "HLA-A") to a format supported by R (e.g. "HLA_A"). The dash and asterisk are a special characters in R, and makes selecting columns by name difficult. 
+
+HLA_column_repair <- function(data) {
+  data %>% rename_with(~ str_replace(., "HLA\\-", "HLA_")) %>% rename_with(~ str_replace(., "\\*$", ""))
+}
+```
+
+```{r}
+# Test the HLA_column_repair function
+
+(test <- tribble(
+  ~case, ~"HLA-A*", ~"HLA-B", ~"HLA-DRB1*", ~"HLA-DQB1",
+  1, "A2", "A3", "A2", "A68",
+  2, "2", "3", "3", "2",
+  3, "01:01", NA, "01:01", "01:01",
+  4, "01:02:06", NA, NA, "01:02:06"
+  ))
+
+test %>% HLA_column_repair(.)
+```
+
+
+```{r}
 # Create a function to determine if typing at a locus is concordant between two assays. It is assumed that an "NA" value at the either allele indicates a homozygous typing at that locus, so the function copies the typing to the other allele to ensure accurate results. If no typing (NA) is present in either allele, it is assumed that no alleles were detected at that locus. The function requires "blank" results to be recorded as "NA," so any other way of recording blank results (e.g. "blank" or "-") needs to be converted to "NA."
 
 # The typing_concordance function arguments are assay X allele 1 (x.1), assay X allele 2 (x.2), assay Y allele 1 (y.1), assay Y allele 2 (y.2), and what values to record if the results are concordant or discordant..
@@ -183,27 +206,27 @@ HLA_prefix_add <- function(.data, columns, prefix = "HLA-") {
 ```{r}
 # HLA genomic truncate function: truncate multi-field typing to fewer fields. If any number other than 1, 2, or 3 is entered for "fields," the entire type will be returned. Similarly, non-molecular nomenclature will be returned without modification. Note this will not keep G or P group designations, as they are not WHO-recognized suffixes. Should these also be kept? Maybe have a separate argument to keep or remove them?
 
-HLA_truncate <- function(.data, columns, fields = 2, keep_suffix = TRUE) {
+HLA_truncate <- function(data, columns, fields = 2, keep_suffix = TRUE) {
     # Extract first 3, 2, or 1 fields and any prefixes.
   if (fields == 3) {
-    A <- str_extract(.data, "(HLA-)?([:alnum:]{0,4})(\\*)?[:digit:]{1,4}:?[:digit:]{0,4}:?[:digit:]{0,4}")
+    A <- str_extract(data, "(HLA-)?([:alnum:]{0,4})(\\*)?[:digit:]{1,4}:?[:digit:]{0,4}:?[:digit:]{0,4}")
   } else if (fields == 2) {
-    A <- str_extract(.data, "(HLA-)?([:alnum:]{0,4})(\\*)?[:digit:]{1,4}:?[:digit:]{0,4}")
+    A <- str_extract(data, "(HLA-)?([:alnum:]{0,4})(\\*)?[:digit:]{1,4}:?[:digit:]{0,4}")
   } else if (fields == 1) {
-    A <- str_extract(.data, "(HLA-)?([:alnum:]{0,4})(\\*)?[:digit:]{1,4}")
+    A <- str_extract(data, "(HLA-)?([:alnum:]{0,4})(\\*)?[:digit:]{1,4}")
   } else {
-    A <- str_extract(.data, "(HLA-)?([:alnum:]{0,4})(\\*)?[:digit:]{1,4}:?[:digit:]{0,4}:?[:digit:]{0,4}:?[:digit:]{0,4}")
+    A <- str_extract(data, "(HLA-)?([:alnum:]{0,4})(\\*)?[:digit:]{1,4}:?[:digit:]{0,4}:?[:digit:]{0,4}:?[:digit:]{0,4}")
   }
 
   {
   # Extract any WHO-recognized suffixes
-  B <- replace_na(str_extract(.data, "[LSCAQNlscaqn]$"), "")
+  B <- replace_na(str_extract(data, "[LSCAQNlscaqn]$"), "")
   }
   
   {
     # Glue truncated typing and suffixes if indicated.
     if (keep_suffix == TRUE) {
-    na_if(str_glue("{A}{B}"), "NA")
+    na_if(str_c({A}, {B}, sep = ""), "NA")
     } else {
       A
     }
@@ -217,7 +240,7 @@ HLA_truncate <- function(.data, columns, fields = 2, keep_suffix = TRUE) {
   1, "A2", " ", "DQA03", "15",
   2, "02:01:01:01", "03:01:01N", "03:02", "blank",
   3, "B*11", "68", "17", "-",
-  4, "HLA-A*66:01:06:01N", NA, "DQA1*04:05:02:01", "15:16Q"
+  4, "HLA-A*66:01:06:01N", NA, "DRB3*04:05:02:01", "15:16Q"
   ))
 
 (test %>% mutate(A.1_2field = HLA_truncate(A.1, fields = 3)))
@@ -226,7 +249,7 @@ HLA_truncate <- function(.data, columns, fields = 2, keep_suffix = TRUE) {
 
 (test %>% mutate(across(A.1:DR.2, ~HLA_truncate(., fields = 2, keep_suffix = TRUE))))
 
-(test %>% mutate(across(A.1:DR.2, ~HLA_truncate(., fields = 4, keep_suffix = FALSE))))
+(test %>% mutate(across(A.1:DR.2, ~HLA_truncate(., fields = 2, keep_suffix = FALSE))))
 ```
 
 # HML read function: get the GL strings from an HML file
@@ -272,6 +295,37 @@ bind_rows(dfs)%>%
 
 (test2 <- HML_read("NGS_low_res_TruSight_NGSengine.hml"))
 ```
+
+```{r}
+# GLstring_genes function. The first step in parsing a GL string is separating the genes.
+
+GLstring_genes <- function(.data, gl_string){
+  # Identify the columns to modify
+  col2mod <- names(select(.data, {{gl_string}}))
+  .data %>% 
+    separate_longer_delim({{ col2mod }}, delim = "^") %>% 
+    rename(gl_string = {{ col2mod }}) %>% 
+    mutate(locus = str_extract(gl_string, "[[:alnum:]-]+(?=\\*)")) %>% 
+    pivot_wider(names_from = locus, values_from = gl_string) %>% 
+    HLA_column_repair(.)
+}
+```
+
+```{r}
+# Test the GLstring_genes function
+
+(test <- tribble(
+  ~case, ~string, 
+  1, "HLA-A*02:01+HLA-A*29:02^HLA-B*44:03+HLA-B*49:01^HLA-C*07:01+HLA-C*16:01^HLA-DRB1*04:05+HLA-DRB1*07:01^HLA-DRB4*01:01+HLA-DRB4*01:03^HLA-DQA1*02:01+HLA-DQA1*03:03^HLA-DQB1*02:02+HLA-DQB1*03:02^HLA-DPA1*01:03+HLA-DPA1*02:01^HLA-DPB1*11:01+HLA-DPB1*104:01	", 
+  2, "HLA-A*03:01+HLA-A*68:01^HLA-C*07:01+HLA-C*07:02^HLA-DPA1*01:03+HLA-DPA1*01:03^HLA-DPB1*04:02+HLA-DPB1*04:02^HLA-DQA1*01:02+HLA-DQA1*05:05^HLA-DQB1*03:01+HLA-DQB1*05:02^HLA-DRB1*15:01+HLA-DRB1*12:01^HLA-DRB3*02:02^HLA-DRB5*01:01+HLA-DRB5*01:01", 
+  3, "HLA-A*02:01:01^HLA-E*01:02", 
+  4, "HLA-A*02:01:01+HLA-A*32:01:01^MICA*001:01+MICA*008:01^MICB*001:01", 
+  ))
+
+test %>% GLstring_genes(string)
+```
+
+
 
 ```{r}
 # GLstring_genotype_ambiguity function. The function keeps the first genotype ambiguity in a GL string, and either drops the rest of the ambiguities or places them in a column with "_ambiguity" appended. Note that this should be performed in order of GL string precedence, i.e. only after genes have been separated; an error will be thrown if a "^" is detected in the GL strings.
@@ -436,3 +490,37 @@ test %>% GLstring_allele_ambiguity(c(HLA_A, HLA_B, HLA_DRB1), keep_ambiguities =
 
 test %>% GLstring_allele_ambiguity(starts_with("HLA_D"))
 ```
+
+```{r}
+# A function for combining two columns of typing from the same locus to a single column in appropriate GL string format.
+
+GLstring_gene_copies_combine <- function(.data, columns, sample_column = "sample"){
+  # Identify the columns to modify
+  cols2mod <- names(select(.data, {{columns}}))
+  
+  .data %>% 
+    pivot_longer(cols2mod, names_to = "locus", values_to = "allele") %>% 
+    mutate(locus = str_extract(allele, "HLA-[:alnum:]+")) %>% 
+    filter(!is.na(locus)) %>% 
+    summarise(allele = str_c(allele, collapse = "+"), .by = c({{sample_column}}, locus)) %>% 
+    pivot_wider(names_from = locus, values_from = allele) %>% 
+    rename_with(~ str_replace(., "HLA\\-", "HLA_"))
+}
+```
+
+```{r}
+# A function for combining all loci (with genotype ambiguities, gene copies, phased genes, and allele ambiguities already combined) to a single column in appropriate GL string format.
+
+GLstring_genes_combine <- function(.data, columns, output_column = "HLA_genotype"){
+  # Identify the columns to modify
+  cols2mod <- names(select(.data, {{columns}}))
+  
+  .data %>% 
+    unite({{output_column}}, cols2mod, sep = "^", na.rm = TRUE)
+}
+```
+
+
+
+
+
